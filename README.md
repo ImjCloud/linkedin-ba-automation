@@ -1,69 +1,76 @@
-# LinkedIn BA Automation (starter implementation)
+﻿# LinkedIn BA Automation
 
-A dedicated Next.js/Vercel app for a daily, source-supported Business Analyst thought-leadership post. It uses LinkedIn's official OAuth and Posts API, Supabase for persistent credentials/logs, and OpenAI Responses API with web search for content generation.
+A dedicated Next.js application for evidence-led Business Analyst thought leadership. It uses Gemini to generate draft content, Upstash Redis for persistent credentials and publishing records, and LinkedIn OAuth and the LinkedIn Posts API.
 
-## Current state and honest limitations
+## Architecture
 
-This is a starter implementation, **not a live publishing system yet**. It has not been deployed, connected to a LinkedIn developer app, or tested against a real LinkedIn account. Do not claim it is live until OAuth succeeds and an end-to-end publishing test returns a LinkedIn post URN.
+- Next.js deployed on Vercel
+- Google Gemini for content generation and research grounding
+- Upstash Redis for credentials, daily post records, and publishing events
+- LinkedIn OAuth for profile authorisation
+- Vercel Cron for scheduled execution
+- Optional alert webhook for failures
 
-- Vercel Cron runs at `0 8 * * *` UTC = 09:00 Africa/Lagos (WAT). Cron timing depends on Vercel plan availability.
-- The LinkedIn API does not offer a future publication time in the post creation payload; Vercel Cron is the scheduler.
-- A LinkedIn app needs the self-service **Share on LinkedIn** product and member permission `w_member_social`.
-- Access tokens may expire. This starter stops and alerts rather than publishing with an expired token. Refresh-token availability depends on LinkedIn's token grant; reconnect if no refresh token is issued.
-- Quality checks are deterministic guardrails, not a guarantee of truth. Review source quality and test carefully before enabling production auto-publishing.
-- There is no manual approval gate by design; failed checks block publication and send an alert if `ALERT_WEBHOOK_URL` is configured.
-- The app writes secrets only server-side. Never put service-role keys, client secrets, cron secrets, or access tokens in `NEXT_PUBLIC_*` variables or source control.
+## Environment variables
 
-## 1. Create external resources
-
-1. Create a **new dedicated Supabase project**. Do not reuse unrelated projects or paste keys into chat.
-2. In Supabase SQL Editor, run `supabase/migrations/0001_initial.sql`.
-3. Create a LinkedIn app at <https://www.linkedin.com/developers/>. Add the exact callback URL:
-   `https://YOUR-DEPLOYMENT-DOMAIN/api/oauth/linkedin/callback`
-4. Add the **Share on LinkedIn** product to the app. This provides `w_member_social`. The app's OAuth consent request also asks for `openid profile` to identify the member.
-5. Create an OpenAI API key with access to the Responses API and web search.
-6. Create a private GitHub repository named `linkedin-ba-automation`, then push this project.
-
-## 2. Deploy to Vercel
-
-Import the new repository as a separate Vercel project. Add all environment variables from `.env.example` in Vercel Project Settings. Use the deployed HTTPS URL for `APP_URL` and `LINKEDIN_REDIRECT_URI`. Generate a unique random `CRON_SECRET` of at least 32 characters. Configure `ALERT_WEBHOOK_URL` to a private Slack/Teams webhook if alerts are desired.
-
-Environment variables required:
+Configure these in your local `.env.local` file and deployment environment. Never commit secret values or share them in chat.
 
 - `APP_URL`
 - `LINKEDIN_CLIENT_ID`
 - `LINKEDIN_CLIENT_SECRET`
 - `LINKEDIN_REDIRECT_URI`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default `gpt-5`; set to a model available to your API project)
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `TOKEN_ENCRYPTION_KEY` (generate with `openssl rand -hex 32`; store only in Vercel and a secure password manager)
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL` (optional; defaults to `gemini-2.5-flash`)
+- `TOKEN_ENCRYPTION_KEY` (64 hexadecimal characters)
 - `CRON_SECRET`
-- optional `ALERT_WEBHOOK_URL`
-- optional `LINKEDIN_API_VERSION` (defaults to `202610`; check LinkedIn's current supported version before deployment)
+- `ALERT_WEBHOOK_URL` (optional)
 
-## 3. Connect the LinkedIn profile
+Use `.env.example` as the template for required settings.
 
-Visit `https://YOUR-DEPLOYMENT-DOMAIN/api/oauth/linkedin/start` while logged into your app deployment and approve the LinkedIn permissions. The callback stores the token in the private Supabase table. The service-role key is server-only. Revoke app access in LinkedIn settings if you want to disconnect.
+## Local development
 
-## 4. Verify before enabling automatic publishing
+Install dependencies:
 
-1. Open `/api/health`; it should report database reachable.
-2. Verify the `linkedin_credentials` row exists in Supabase without exposing the access token.
-3. Call the protected cron endpoint manually from a secure terminal using `Authorization: Bearer $CRON_SECRET`. A successful run publishes a real public LinkedIn post; do this only when ready to publish.
-4. Verify the response contains `published: true` and a `postUrn`, then confirm the post appears on your LinkedIn profile and the database records status `published`.
-5. Inspect `publishing_events` for quality-check and publication records.
-6. Ensure the Vercel Cron is active and test a failure alert before relying on the daily run.
+    npm ci
 
-Do not use a GET request to the cron endpoint without its secret. Do not use a production test unless you consent to a public test post.
+Run the development server:
 
-## Security and operational hardening before production
+    npm run dev
 
-- Restrict access to the app's status page if it will be public.
-- OAuth access and refresh tokens are encrypted at the application layer with AES-256-GCM before storage. Back up `TOKEN_ENCRYPTION_KEY` securely; rotating it requires re-encrypting stored tokens or reconnecting LinkedIn.
-- Add retry/reconciliation logic for uncertain network timeouts. A request may reach LinkedIn even if the client does not receive its response; inspect logs before retrying to avoid duplicates.
-- Add content-hash duplicate checks across prior days, not only one-post-per-day uniqueness.
-- Verify LinkedIn API version availability and OAuth token lifetime before production.
-- Add monitoring and a periodic token-expiry alert. The current implementation fails closed on expired tokens.
-- Keep all generated source URLs and audit records; never fabricate personal achievements or business metrics.
+Check the application health endpoint:
+
+    http://localhost:3000/api/health
+
+Test Gemini draft generation through the protected test endpoint. This endpoint must use the configured cron secret and must not publish to LinkedIn:
+
+    POST /api/test/gemini
+
+Send the request with an `Authorization: Bearer <CRON_SECRET>` header. Keep the secret private.
+
+## LinkedIn setup
+
+1. Configure a LinkedIn application and the required sharing permissions.
+2. Set the exact OAuth callback URL to match `LINKEDIN_REDIRECT_URI`.
+3. Configure the environment variables.
+4. Open `/api/oauth/linkedin/start` to begin authorisation.
+5. Confirm that the health endpoint can reach Redis.
+
+## Publishing safeguards
+
+- Content must pass quality checks before publication.
+- Daily post records are reserved to help prevent duplicate publication.
+- Failed publication attempts require review rather than blind automatic retries.
+- Alerts are optional and depend on `ALERT_WEBHOOK_URL`.
+- The publishing cron endpoint can publish publicly. Do not invoke it during ordinary validation.
+
+## Validation
+
+Run:
+
+    npx tsc --noEmit
+    npm run lint
+    npm run build
+
+Review the staged Git files before pushing. Never commit `.env.local`, access tokens, API keys, or migration backups.
