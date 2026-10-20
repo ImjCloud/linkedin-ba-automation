@@ -6,3 +6,14 @@ node_modules
 .vercel
 coverage
 *.log
+
+# Local credentials and migration backups
+.env
+.env.local
+.env.*.local
+migration-backups/
+
+tsconfig.tsbuildinfo
+
+# Local migration backup files
+*.backup-*
