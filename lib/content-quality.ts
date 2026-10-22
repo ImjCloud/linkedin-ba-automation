@@ -11,22 +11,70 @@ export function validateDraft(
     reasons.push('Post length must be between 500 and 3000 characters.');
   }
 
-  if (!topic || topic.trim().length < 5) {
+  if (!topic.trim() || topic.trim().length < 5) {
     reasons.push('Missing or vague topic.');
   }
 
-  const validSources = sources.filter(
-    (source) => /^https:\/\//i.test(source.url) && source.title.trim(),
-  );
+  const validSources = sources.filter((source) => {
+    if (
+      !source ||
+      typeof source.title !== 'string' ||
+      typeof source.url !== 'string' ||
+      !source.title.trim()
+    ) {
+      return false;
+    }
+
+    try {
+      const url = new URL(source.url);
+      return url.protocol === 'https:' && Boolean(url.hostname);
+    } catch {
+      return false;
+    }
+  });
 
   if (validSources.length < 2) {
     reasons.push(
-      'Fewer than two HTTPS sources were confirmed in Google Search grounding metadata.',
+      'Fewer than two valid HTTPS sources were provided.',
     );
   }
 
-  if (sources.some((source) => !source.title.trim())) {
+  const normalizedUrls = validSources.map((source) => {
+    const url = new URL(source.url);
+    url.hash = '';
+    return url.toString().replace(/\/$/, '').toLowerCase();
+  });
+
+  if (new Set(normalizedUrls).size !== normalizedUrls.length) {
+    reasons.push('Duplicate reference sources detected.');
+  }
+
+  if (
+    sources.some(
+      (source) =>
+        !source ||
+        typeof source.title !== 'string' ||
+        !source.title.trim(),
+    )
+  ) {
     reasons.push('A source is missing its title.');
+  }
+
+  if (
+    sources.some(
+      (source) =>
+        !source ||
+        typeof source.url !== 'string' ||
+        (() => {
+          try {
+            return new URL(source.url).protocol !== 'https:';
+          } catch {
+            return true;
+          }
+        })(),
+    )
+  ) {
+    reasons.push('Every reference source must use a valid HTTPS URL.');
   }
 
   if (/\b(I led|I delivered|my client|at my company|we achieved)\b/i.test(text)) {

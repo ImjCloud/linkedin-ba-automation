@@ -24,7 +24,7 @@ test('accepts a valid mock draft', () => {
 test('rejects a draft with too few HTTPS sources', () => {
   const result = validateDraft('Workflow automation', text, sources.slice(0, 1));
   assert.equal(result.passed, false);
-  assert.ok(result.reasons.some((reason) => reason.includes('Fewer than two HTTPS sources')));
+  assert.ok(result.reasons.some((reason) => reason.includes('Fewer than two valid HTTPS sources')));
 });
 
 test('rejects a vague topic', () => {
@@ -48,4 +48,34 @@ test('rejects repeated-character anomalies', () => {
 
 test('rejects text outside the permitted length', () => {
   assert.equal(validateDraft('Workflow automation', 'Too short.', sources).passed, false);
+});
+
+test('rejects malformed HTTPS URLs', () => {
+  const invalidSources = [
+    { title: 'Source One', url: 'https:///' },
+    sources[1],
+  ];
+  const result = validateDraft('Workflow automation', text, invalidSources);
+  assert.equal(result.passed, false);
+  assert.ok(result.reasons.some((reason) => reason.includes('valid HTTPS URL')));
+});
+
+test('rejects duplicate reference URLs', () => {
+  const duplicateSources = [
+    { title: 'Source One', url: 'https://example.com/one' },
+    { title: 'Source One duplicate', url: 'https://EXAMPLE.com/one#section' },
+  ];
+  const result = validateDraft('Workflow automation', text, duplicateSources);
+  assert.equal(result.passed, false);
+  assert.ok(result.reasons.some((reason) => reason.includes('Duplicate reference sources')));
+});
+
+test('rejects a source with a missing title', () => {
+  const invalidSources = [
+    { title: '', url: 'https://example.com/one' },
+    sources[1],
+  ];
+  const result = validateDraft('Workflow automation', text, invalidSources);
+  assert.equal(result.passed, false);
+  assert.ok(result.reasons.some((reason) => reason.includes('missing its title')));
 });

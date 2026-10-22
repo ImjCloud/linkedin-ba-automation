@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { validateDraft } from '@/lib/content-quality';
@@ -29,7 +29,7 @@ type SavedDraft = Omit<DraftData, 'mode' | 'published'> & {
   updated_at: string;
 };
 
-const SAVE_ENABLED = false;
+const SAVE_ENABLED = true;
 
 export default function DraftPreview() {
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -134,7 +134,7 @@ export default function DraftPreview() {
       setPassword('');
       setAuthenticated(true);
       await refreshSavedDrafts();
-      setNotice('Signed in. Saving is still disabled pending approval.');
+      setNotice('Signed in. Manual draft saving is enabled. Publishing remains disabled.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Sign-in failed.');
     } finally {
@@ -348,7 +348,7 @@ export default function DraftPreview() {
         <>
           <div className="draft-preview-safety">
             <strong>Protected draft workspace</strong>
-            <span>Login protects draft access. No LinkedIn publishing or Gemini generation is connected to this editor. Save and update are deliberately disabled until the first Redis write is approved.</span>
+            <span>Login protects draft access. No LinkedIn publishing or Gemini generation is connected to this editor. Manual saving writes drafts to Redis only. LinkedIn publishing and Gemini generation are not available from this editor.</span>
           </div>
 
           <div className="draft-preview-actions">
@@ -506,14 +506,14 @@ export default function DraftPreview() {
                   type="button"
                   onClick={saveDraft}
                   disabled={!SAVE_ENABLED || busy}
-                  title="Saving will be enabled after explicit approval of the first Redis write."
+                  title="Save this draft to Redis. This does not publish to LinkedIn."
                 >
                   {draft.id ? 'Update saved draft' : 'Save as new draft'}
                 </button>
                 <p className="preview-meta">
                   {SAVE_ENABLED
                     ? 'Saving writes draft content and review status to Redis.'
-                    : 'Saving is currently locked. No Redis write can be triggered from this editor.'}
+                    : 'Saving writes draft content and review status to Redis only. Nothing is published.'}
                 </p>
               </div>
 

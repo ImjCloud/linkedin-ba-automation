@@ -189,3 +189,94 @@ test('uses atomic Redis scripts for creation, updates and deletion', async () =>
   assert.match(scripts[2], /redis\.call\('LREM'/);
 });
 
+
+// EDGE_CASE_TESTS_20261022
+
+test('rejects a draft creation when Redis cannot reserve a unique ID', async () => {
+  const redis = createMockRedis();
+  redis.eval = async (script) => {
+    if (script.includes('-- create-saved-draft')) return 0;
+    throw new Error('Unexpected script passed to mock Redis.');
+  };
+
+  const store = createDraftStore(() => redis);
+
+  await assert.rejects(
+    store.createSavedDraft(sampleInput()),
+    /Could not reserve a unique draft identifier/,
+  );
+  assert.equal(redis.values.size, 0);
+});
+
+test('deletion removes every occurrence of the draft ID from the index', async () => {
+  const redis = createMockRedis();
+  const store = createDraftStore(() => redis);
+  const draft = await store.createSavedDraft(sampleInput());
+
+  redis.lists.set('linkedin:drafts:index', [
+    draft.id,
+    'another-draft-id',
+    draft.id,
+    draft.id,
+  ]);
+
+  assert.equal(await store.deleteSavedDraft(draft.id), true);
+  assert.equal(await store.getSavedDraft(draft.id), null);
+  assert.deepEqual(
+    await redis.lrange('linkedin:drafts:index', 0, 99),
+    ['another-draft-id'],
+  );
+});
+
+test('rejects malformed JSON returned for an updated draft', async () => {
+  const redis = createMockRedis();
+  const store = createDraftStore(() => redis);
+  const draft = await store.createSavedDraft(sampleInput());
+  const originalEval = redis.eval.bind(redis);
+
+  redis.eval = async (script, keys, args) => {
+    if (script.includes('-- update-saved-draft')) {
+      return '{malformed-json';
+    }
+    return originalEval(script, keys, args);
+  };
+
+  await assert.rejects(
+    store.updateSavedDraft(draft.id, {
+      ...sampleInput('Updated topic'),
+    }),
+    SyntaxError,
+  );
+});
+
+test('guards draft creation against an unexpected Redis index type', async () => {
+  const redis = createMockRedis();
+  redis.values.set('linkedin:drafts:index', 'not-a-list');
+
+  let capturedScript = '';
+  const originalEval = redis.eval.bind(redis);
+
+  redis.eval = async (script, keys, args) => {
+    if (script.includes('-- create-saved-draft')) {
+      capturedScript = script;
+
+      // Simulate Redis TYPE returning a non-list index.
+      if (redis.values.has(keys[1])) {
+        throw new Error('Draft index has an unexpected Redis type.');
+      }
+    }
+
+    return originalEval(script, keys, args);
+  };
+
+  const store = createDraftStore(() => redis);
+
+  await assert.rejects(
+    store.createSavedDraft(sampleInput()),
+    /Draft index has an unexpected Redis type/,
+  );
+
+  assert.match(capturedScript, /redis\.call\('TYPE', KEYS\[2\]\)/);
+  assert.match(capturedScript, /redis\.error_reply/);
+  assert.equal(redis.values.get('linkedin:drafts:index'), 'not-a-list');
+});
