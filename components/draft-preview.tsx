@@ -438,14 +438,16 @@ export default function DraftPreview() {
             >
               {busy ? 'Working…' : 'Generate with Gemini'}
             </button>
-            <button
-              className="preview-secondary-button"
-              type="button"
-              onClick={loadPreview}
-              disabled={busy}
-            >
-              Load sample draft
-            </button>
+            {process.env.NODE_ENV === 'development' && (
+              <button
+                className="preview-secondary-button"
+                type="button"
+                onClick={loadPreview}
+                disabled={busy}
+              >
+                Load sample draft
+              </button>
+            )}
             <button
               className="preview-secondary-button"
               type="button"
