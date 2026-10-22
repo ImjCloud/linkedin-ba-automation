@@ -249,6 +249,15 @@ export default async function Home() {
                 <small>{linkedinConnected ? 'A stored access token is present and not near expiry' : 'OAuth is not connected or its access token is expired'}</small>
               </div>
               <Status value={linkedinConnected ? 'Connected' : 'Not connected'} good={linkedinConnected} />
+              {!linkedinConnected && (
+                <Link
+                  className="preview-button"
+                  href="/api/oauth/linkedin/start"
+                  title="Connect your personal LinkedIn profile. This does not publish anything."
+                >
+                  Connect LinkedIn
+                </Link>
+              )}
             </div>
             <div className="health-row">
               <span className="health-icon">◷</span>
