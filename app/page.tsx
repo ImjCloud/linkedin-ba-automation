@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import DraftPreview from '@/components/draft-preview';
 import {
+  getCredentials,
   getDailyPost,
   getRecentPublishingEvents,
 } from '@/lib/redis-store';
@@ -8,6 +9,15 @@ import { getRedis } from '@/lib/redis';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+function validHttpsUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function lagosDay() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -42,6 +52,7 @@ export default async function Home() {
   let redisOk = false;
   let post: Awaited<ReturnType<typeof getDailyPost>> = null;
   let events: Awaited<ReturnType<typeof getRecentPublishingEvents>> = [];
+  let linkedinConnected = false;
   let loadError = false;
 
   try {
@@ -49,10 +60,18 @@ export default async function Home() {
     redisOk = (await redis.ping()) === 'PONG';
 
     if (redisOk) {
-      [post, events] = await Promise.all([
+      const [todayPost, recentEvents, credentials] = await Promise.all([
         getDailyPost(day),
         getRecentPublishingEvents(8),
+        getCredentials(),
       ]);
+      post = todayPost;
+      events = recentEvents;
+      linkedinConnected = Boolean(
+        credentials &&
+        Number.isFinite(new Date(credentials.expires_at).getTime()) &&
+        new Date(credentials.expires_at).getTime() > Date.now() + 120000,
+      );
     }
   } catch {
     loadError = true;
@@ -60,12 +79,16 @@ export default async function Home() {
   }
 
   const envChecks = [
-    ['Upstash Redis URL', Boolean(process.env.UPSTASH_REDIS_REST_URL)],
+    ['Application URL', validHttpsUrl(process.env.APP_URL)],
+    ['Upstash Redis URL', validHttpsUrl(process.env.UPSTASH_REDIS_REST_URL)],
     ['Upstash Redis token', Boolean(process.env.UPSTASH_REDIS_REST_TOKEN)],
     ['Gemini API key', Boolean(process.env.GEMINI_API_KEY)],
-    ['Encryption key', /^[0-9a-fA-F]{64}$/.test(process.env.TOKEN_ENCRYPTION_KEY ?? '')],
+    ['Encryption key (64 hex characters)', /^[0-9a-fA-F]{64}$/.test(process.env.TOKEN_ENCRYPTION_KEY ?? '')],
     ['Cron secret', Boolean(process.env.CRON_SECRET)],
-    ['LinkedIn OAuth client', Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET)],
+    ['Draft access secret (32+ characters)', (process.env.DRAFTS_ACCESS_SECRET?.trim().length ?? 0) >= 32],
+    ['LinkedIn OAuth client ID', Boolean(process.env.LINKEDIN_CLIENT_ID?.trim())],
+    ['LinkedIn OAuth client secret', Boolean(process.env.LINKEDIN_CLIENT_SECRET?.trim())],
+    ['LinkedIn redirect URI', validHttpsUrl(process.env.LINKEDIN_REDIRECT_URI)],
   ];
 
   const readyCount = envChecks.filter((item) => item[1]).length;
@@ -223,17 +246,17 @@ export default async function Home() {
               <span className="health-icon">in</span>
               <div className="health-copy">
                 <strong>LinkedIn OAuth</strong>
-                <small>Credentials and publishing not tested</small>
+                <small>{linkedinConnected ? 'A stored access token is present and not near expiry' : 'OAuth is not connected or its access token is expired'}</small>
               </div>
-              <Status value="Unverified" />
+              <Status value={linkedinConnected ? 'Connected' : 'Not connected'} good={linkedinConnected} />
             </div>
             <div className="health-row">
               <span className="health-icon">◷</span>
               <div className="health-copy">
-                <strong>Scheduled run</strong>
-                <small>Vercel cron configuration</small>
+                <strong>Scheduled draft run</strong>
+                <small>Daily at 09:00 Lagos time; creates a draft only</small>
               </div>
-              <Status value="Not verified" />
+              <Status value="Configured in vercel.json" />
             </div>
             <div className="safety-note">
               <strong>Publishing safety</strong>
