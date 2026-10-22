@@ -93,6 +93,7 @@ export default async function Home() {
     ['LinkedIn OAuth client ID', Boolean(process.env.LINKEDIN_CLIENT_ID?.trim())],
     ['LinkedIn OAuth client secret', Boolean(process.env.LINKEDIN_CLIENT_SECRET?.trim())],
     ['LinkedIn redirect URI', validHttpsUrl(process.env.LINKEDIN_REDIRECT_URI)],
+    ['Failure alert webhook (optional)', Boolean(process.env.ALERT_WEBHOOK_URL?.trim())],
   ];
 
   const readyCount = envChecks.filter((item) => item[1]).length;
@@ -192,7 +193,11 @@ export default async function Home() {
             <Icon>⚙</Icon>
             <p>Configuration</p>
             <strong className="metric-value">{readyCount}/{envChecks.length}</strong>
-            <span className="metric-note">Required settings present</span>
+            <span className="metric-note">
+              {process.env.ALERT_WEBHOOK_URL?.trim()
+                ? 'Core settings and alert webhook present'
+                : 'Core settings present; failure alerts not configured'}
+            </span>
           </article>
         </section>
 
