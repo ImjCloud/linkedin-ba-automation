@@ -217,6 +217,44 @@ export default function DraftPreview() {
     }
   }
 
+  async function generateWithGemini() {
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch('/api/drafts/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        cache: 'no-store',
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        draft?: SavedDraft;
+      };
+
+      if (!response.ok || !data.ok || !data.draft) {
+        throw new Error(data.error || 'Gemini could not generate a draft.');
+      }
+
+      const saved = data.draft;
+      setDraft({ ...saved, mode: 'saved', published: false });
+      setTopic(saved.topic);
+      setText(saved.text);
+      setReviewStatus(saved.reviewStatus);
+      setSelectedId(saved.id);
+      await refreshSavedDrafts();
+      setNotice(data.message || 'Draft generated and saved for review. Nothing was published.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Gemini draft generation failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openSavedDraft(id: string) {
     setSelectedId(id);
     setError('');
@@ -243,6 +281,37 @@ export default function DraftPreview() {
 
   function updateText(value: string) {
     setText(value);
+    setReviewStatus('Not reviewed');
+  }
+
+  function updateSource(
+    index: number,
+    field: 'title' | 'url',
+    value: string,
+  ) {
+    if (!draft) return;
+    const sources = draft.sources.map((source, sourceIndex) =>
+      sourceIndex === index ? { ...source, [field]: value } : source,
+    );
+    setDraft({ ...draft, sources });
+    setReviewStatus('Not reviewed');
+  }
+
+  function addSource() {
+    if (!draft || draft.sources.length >= 10) return;
+    setDraft({
+      ...draft,
+      sources: [...draft.sources, { title: '', url: '' }],
+    });
+    setReviewStatus('Not reviewed');
+  }
+
+  function removeSource(index: number) {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      sources: draft.sources.filter((_, sourceIndex) => sourceIndex !== index),
+    });
     setReviewStatus('Not reviewed');
   }
 
@@ -348,7 +417,7 @@ export default function DraftPreview() {
         <>
           <div className="draft-preview-safety">
             <strong>Protected draft workspace</strong>
-            <span>Login protects draft access. No LinkedIn publishing or Gemini generation is connected to this editor. Manual saving writes drafts to Redis only. LinkedIn publishing and Gemini generation are not available from this editor.</span>
+            <span>Generate with Gemini creates a draft saved to Redis for human review. You can edit its text and reference sources here. This workspace never publishes to LinkedIn.</span>
           </div>
 
           <div className="draft-preview-actions">
@@ -363,11 +432,22 @@ export default function DraftPreview() {
             <button
               className="preview-button"
               type="button"
-              onClick={loadPreview}
+              onClick={() => void generateWithGemini()}
               disabled={busy}
+              title="Calls Gemini to create one unpublished draft and save it to Redis."
             >
-              Load sample draft
+              {busy ? 'Working…' : 'Generate with Gemini'}
             </button>
+            {process.env.NODE_ENV === 'development' && (
+              <button
+                className="preview-secondary-button"
+                type="button"
+                onClick={loadPreview}
+                disabled={busy}
+              >
+                Load sample draft
+              </button>
+            )}
             <button
               className="preview-secondary-button"
               type="button"
@@ -462,15 +542,49 @@ export default function DraftPreview() {
 
               <div className="preview-sources">
                 <h3>Reference sources</h3>
-                <ul className="source-list">
-                  {draft.sources.map((source) => (
-                    <li key={source.url}>
-                      <a href={source.url} target="_blank" rel="noopener noreferrer">
-                        {source.title}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
+                {draft.sources.length === 0 && (
+                  <p className="preview-meta">No sources added yet. Add at least two valid HTTPS sources.</p>
+                )}
+                {draft.sources.map((source, index) => (
+                  <div className="draft-source-editor" key={index}>
+                    <label className="draft-field">
+                      <span className="field-label">Source title {index + 1}</span>
+                      <input
+                        value={source.title}
+                        onChange={(event) => updateSource(index, 'title', event.target.value)}
+                        maxLength={200}
+                        aria-label={`Reference source ${index + 1} title`}
+                      />
+                    </label>
+                    <label className="draft-field">
+                      <span className="field-label">HTTPS source URL {index + 1}</span>
+                      <input
+                        type="url"
+                        value={source.url}
+                        onChange={(event) => updateSource(index, 'url', event.target.value)}
+                        maxLength={2048}
+                        placeholder="https://…"
+                        aria-label={`Reference source ${index + 1} URL`}
+                      />
+                    </label>
+                    <button
+                      className="preview-secondary-button"
+                      type="button"
+                      onClick={() => removeSource(index)}
+                      disabled={busy}
+                    >
+                      Remove source
+                    </button>
+                  </div>
+                ))}
+                <button
+                  className="preview-secondary-button"
+                  type="button"
+                  onClick={addSource}
+                  disabled={busy || draft.sources.length >= 10}
+                >
+                  Add reference source
+                </button>
               </div>
 
               <div className="draft-review-panel">

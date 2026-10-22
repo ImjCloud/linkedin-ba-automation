@@ -1,21 +1,32 @@
 import Link from 'next/link';
 import DraftPreview from '@/components/draft-preview';
 import {
+  getCredentials,
   getDailyPost,
   getRecentPublishingEvents,
 } from '@/lib/redis-store';
 import { getRedis } from '@/lib/redis';
+import { listSavedDrafts } from '@/lib/draft-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function lagosDay() {
+function validHttpsUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function lagosDay(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Lagos',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date());
+  }).format(date);
 }
 
 function Status({
@@ -42,6 +53,8 @@ export default async function Home() {
   let redisOk = false;
   let post: Awaited<ReturnType<typeof getDailyPost>> = null;
   let events: Awaited<ReturnType<typeof getRecentPublishingEvents>> = [];
+  let savedDrafts: Awaited<ReturnType<typeof listSavedDrafts>> = [];
+  let linkedinConnected = false;
   let loadError = false;
 
   try {
@@ -49,10 +62,20 @@ export default async function Home() {
     redisOk = (await redis.ping()) === 'PONG';
 
     if (redisOk) {
-      [post, events] = await Promise.all([
+      const [todayPost, recentEvents, credentials, drafts] = await Promise.all([
         getDailyPost(day),
         getRecentPublishingEvents(8),
+        getCredentials(),
+        listSavedDrafts(),
       ]);
+      post = todayPost;
+      events = recentEvents;
+      savedDrafts = drafts;
+      linkedinConnected = Boolean(
+        credentials &&
+        Number.isFinite(new Date(credentials.expires_at).getTime()) &&
+        new Date(credentials.expires_at).getTime() > Date.now() + 120000,
+      );
     }
   } catch {
     loadError = true;
@@ -60,19 +83,31 @@ export default async function Home() {
   }
 
   const envChecks = [
-    ['Upstash Redis URL', Boolean(process.env.UPSTASH_REDIS_REST_URL)],
+    ['Application URL', validHttpsUrl(process.env.APP_URL)],
+    ['Upstash Redis URL', validHttpsUrl(process.env.UPSTASH_REDIS_REST_URL)],
     ['Upstash Redis token', Boolean(process.env.UPSTASH_REDIS_REST_TOKEN)],
     ['Gemini API key', Boolean(process.env.GEMINI_API_KEY)],
-    ['Encryption key', /^[0-9a-fA-F]{64}$/.test(process.env.TOKEN_ENCRYPTION_KEY ?? '')],
+    ['Encryption key (64 hex characters)', /^[0-9a-fA-F]{64}$/.test(process.env.TOKEN_ENCRYPTION_KEY ?? '')],
     ['Cron secret', Boolean(process.env.CRON_SECRET)],
-    ['LinkedIn OAuth client', Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET)],
+    ['Draft access secret (32+ characters)', (process.env.DRAFTS_ACCESS_SECRET?.trim().length ?? 0) >= 32],
+    ['LinkedIn OAuth client ID', Boolean(process.env.LINKEDIN_CLIENT_ID?.trim())],
+    ['LinkedIn OAuth client secret', Boolean(process.env.LINKEDIN_CLIENT_SECRET?.trim())],
+    ['LinkedIn redirect URI', validHttpsUrl(process.env.LINKEDIN_REDIRECT_URI)],
+    ['Failure alert webhook (optional)', Boolean(process.env.ALERT_WEBHOOK_URL?.trim())],
   ];
 
   const readyCount = envChecks.filter((item) => item[1]).length;
-  const qualityPassed = post?.quality_checks?.passed === true;
+  const todayDrafts = savedDrafts
+    .filter((draft) => lagosDay(new Date(draft.updated_at)) === day)
+    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+  const latestTodayDraft = todayDrafts[0] ?? null;
+  const todayRecordCount = post ? 1 : todayDrafts.length;
+  const qualityPassed = post
+    ? post.quality_checks?.passed === true
+    : latestTodayDraft?.checks.passed === true;
   const published = post?.status === 'published';
   const blocked = post?.status === 'blocked' || post?.status === 'failed';
-  const todayStatus = post?.status ?? 'No run recorded';
+  const todayStatus = post?.status ?? (latestTodayDraft ? 'Draft saved for review' : 'No run recorded');
 
   const recentEvents = events.map((event, index) => ({
     id: `${event.created_at}-${index}`,
@@ -137,14 +172,14 @@ export default async function Home() {
           <article className="metric-card">
             <Icon>▤</Icon>
             <p>Today&apos;s record</p>
-            <strong className="metric-value">{post ? '1' : '0'}</strong>
-            <span className="metric-note">Lagos calendar day</span>
+            <strong className="metric-value">{todayRecordCount}</strong>
+            <span className="metric-note">{post ? 'Daily publishing record' : todayDrafts.length > 0 ? `${todayDrafts.length} saved draft(s) updated today` : 'No draft recorded today'}</span>
           </article>
           <article className="metric-card">
             <Icon>✓</Icon>
             <p>Quality checks</p>
             <strong className="metric-value">{post ? (qualityPassed ? 'Passed' : 'Review') : '—'}</strong>
-            <span className="metric-note">{post ? 'Based on today&apos;s stored draft' : 'No draft recorded today'}</span>
+            <span className="metric-note">{post || latestTodayDraft ? 'Based on today\'s latest stored content' : 'No content to validate today'}</span>
           </article>
           <article className="metric-card">
             <Icon>↗</Icon>
@@ -158,7 +193,11 @@ export default async function Home() {
             <Icon>⚙</Icon>
             <p>Configuration</p>
             <strong className="metric-value">{readyCount}/{envChecks.length}</strong>
-            <span className="metric-note">Required settings present</span>
+            <span className="metric-note">
+              {process.env.ALERT_WEBHOOK_URL?.trim()
+                ? 'Core settings and alert webhook present'
+                : 'Core settings present; failure alerts not configured'}
+            </span>
           </article>
         </section>
 
@@ -223,17 +262,26 @@ export default async function Home() {
               <span className="health-icon">in</span>
               <div className="health-copy">
                 <strong>LinkedIn OAuth</strong>
-                <small>Credentials and publishing not tested</small>
+                <small>{linkedinConnected ? 'A stored access token is present and not near expiry' : 'OAuth is not connected or its access token is expired'}</small>
               </div>
-              <Status value="Unverified" />
+              <Status value={linkedinConnected ? 'Connected' : 'Not connected'} good={linkedinConnected} />
+              {!linkedinConnected && (
+                <Link
+                  className="preview-button"
+                  href="/api/oauth/linkedin/start"
+                  title="Connect your personal LinkedIn profile. This does not publish anything."
+                >
+                  Connect LinkedIn
+                </Link>
+              )}
             </div>
             <div className="health-row">
               <span className="health-icon">◷</span>
               <div className="health-copy">
-                <strong>Scheduled run</strong>
-                <small>Vercel cron configuration</small>
+                <strong>Scheduled draft run</strong>
+                <small>Daily at 09:00 Lagos time; creates a draft only</small>
               </div>
-              <Status value="Not verified" />
+              <Status value="Configured in vercel.json" />
             </div>
             <div className="safety-note">
               <strong>Publishing safety</strong>
@@ -293,10 +341,55 @@ export default async function Home() {
                 )}
               </details>
             </>
+          ) : latestTodayDraft ? (
+            <>
+              <div className="content-details">
+                <div>
+                  <span className="field-label">Topic</span>
+                  <strong>{latestTodayDraft.topic || 'Topic not recorded'}</strong>
+                </div>
+                <div>
+                  <span className="field-label">Quality gate</span>
+                  <strong>{latestTodayDraft.checks.passed ? 'Passed' : 'Review required'}</strong>
+                </div>
+                <div>
+                  <span className="field-label">Sources</span>
+                  <strong>{latestTodayDraft.sources.length} recorded</strong>
+                </div>
+                <div>
+                  <span className="field-label">Review status</span>
+                  <strong>{latestTodayDraft.reviewStatus}</strong>
+                </div>
+              </div>
+              {!latestTodayDraft.checks.passed && latestTodayDraft.checks.reasons.length > 0 && (
+                <div className="quality-warning">
+                  <strong>Quality issues to review</strong>
+                  <ul>
+                    {latestTodayDraft.checks.reasons.map((reason, index) => (
+                      <li key={`${reason}-${index}`}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <details className="draft-details">
+                <summary>Inspect saved draft text</summary>
+                <p className="draft-text">{latestTodayDraft.text}</p>
+                {latestTodayDraft.sources.length > 0 && (
+                  <ul className="source-list">
+                    {latestTodayDraft.sources.map((source) => (
+                      <li key={source.url}>
+                        <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
+              <p className="setup-footnote">Unpublished draft saved to Redis. Open the Draft workspace to review or edit it. No LinkedIn post was published.</p>
+            </>
           ) : (
             <div className="empty-state compact-empty">
-              <strong>No daily post record found</strong>
-              <p>That is normal before the first draft has been generated. No post has been created by this dashboard.</p>
+              <strong>No draft or daily post record found</strong>
+              <p>A saved draft will appear here after manual or scheduled generation. Nothing is published automatically by this dashboard.</p>
             </div>
           )}
         </section>
