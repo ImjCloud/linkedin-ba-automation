@@ -90,8 +90,8 @@ from Google's grounding metadata.
   if (!raw) throw new Error('Gemini returned an empty response.');
 
   const cleaned = raw
-    .replace(/^\`\`\`(?:json)?\\s*/i, '')
-    .replace(/\\s*\`\`\`$/, '')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
     .trim();
 
   let parsed: { topic?: unknown; text?: unknown };
