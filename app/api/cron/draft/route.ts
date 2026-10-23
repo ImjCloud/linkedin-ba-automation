@@ -58,12 +58,19 @@ export async function GET(request: NextRequest) {
 
   if (acquired !== 'OK') {
     const existing = await redis.get<string>(lockKey);
+    const quotaLimited = existing === 'quota_limited';
     return NextResponse.json({
       ok: true,
       skipped: true,
       published: false,
-      reason: 'A scheduled draft attempt already exists for this Lagos calendar day.',
-      state: existing === 'generating' ? 'in_progress' : 'already_created',
+      reason: quotaLimited
+        ? 'A previous attempt exhausted the Gemini API quota. Scheduled generation is paused for this Lagos day.'
+        : 'A scheduled draft attempt already exists for this Lagos calendar day.',
+      state: quotaLimited
+        ? 'quota_limited'
+        : existing === 'generating'
+          ? 'in_progress'
+          : 'already_created',
     });
   }
 
@@ -105,19 +112,30 @@ export async function GET(request: NextRequest) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    const quotaLimited = /429|RESOURCE_EXHAUSTED|quota/i.test(message);
 
     try {
-      if ((await redis.get<string>(lockKey)) === 'generating') {
+      if (quotaLimited) {
+        // Do not repeatedly call Gemini after an explicit quota rejection.
+        await redis.set(lockKey, 'quota_limited', { ex: 8 * 24 * 60 * 60 });
+      } else if ((await redis.get<string>(lockKey)) === 'generating') {
         await redis.del(lockKey);
       }
     } catch {
       // Preserve the generation failure if lock cleanup is unavailable.
     }
 
-    await safeLog('failed', { scheduled_day: day, message: message.slice(0, 300) }, null);
+    await safeLog(
+      quotaLimited ? 'quota_limited' : 'failed',
+      { scheduled_day: day, message: message.slice(0, 300) },
+      null,
+    );
 
     try {
-      await alertFailure('Scheduled draft generation failed', `Lagos day: ${day}\n${message}`);
+      await alertFailure(
+        quotaLimited ? 'Scheduled draft generation paused: Gemini quota' : 'Scheduled draft generation failed',
+        `Lagos day: ${day}\n${message}`,
+      );
     } catch {
       // Alerting must not mask the original failure.
     }
@@ -127,9 +145,12 @@ export async function GET(request: NextRequest) {
       {
         ok: false,
         published: false,
-        error: 'Scheduled draft generation failed. Check server logs and provider configuration.',
+        quotaLimited,
+        error: quotaLimited
+          ? 'Gemini API quota is exhausted. Scheduled generation has been paused to prevent repeated failed requests. Restore quota before retrying.'
+          : 'Scheduled draft generation failed. Check server logs and provider configuration.',
       },
-      { status: 502 },
+      { status: quotaLimited ? 429 : 502, headers: { 'Cache-Control': 'no-store' } },
     );
   }
 }
