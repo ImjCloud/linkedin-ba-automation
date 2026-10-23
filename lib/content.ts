@@ -14,19 +14,39 @@ export async function generateDraft(): Promise<Draft> {
   const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
 
   const prompt = `
-Create one original, evidence-led LinkedIn post for a Nigeria-based Business
-Analyst targeting UK recruiters, product leaders and delivery managers.
+Write one original, evidence-led LinkedIn post in the voice of a thoughtful,
+practical Business Analyst based in Nigeria, building a career in digital
+products, workflow automation and delivery, and engaging UK recruiters, product
+leaders and delivery managers.
 
-Research a current business or technology issue using Google Search. Rotate
-themes such as AI governance, cybersecurity, data quality, workflow automation,
-digital identity, fintech, cloud resilience, accessibility, product discovery,
-change adoption and operational risk.
+VOICE: Sound like a real practitioner sharing a useful observation with peers,
+not a corporate blog or generic AI thought-leadership template. Use plain
+natural English, varied sentence lengths, and contractions where appropriate.
+Open with a specific tension, operational detail, trade-off or recognisable
+question. Avoid generic introductions, buzzwords, inflated claims, excessive
+em dashes, repetitive transitions, and predictable problem/solution/impact
+structures. Explain why the issue matters to people doing the work.
 
-Explain the business problem, stakeholder or process impact, a practical BA
-intervention, and a measurable outcome or KPI to investigate. Do not invent
-results, personal experience, clients, metrics or facts. Distinguish facts from
-forecasts. Use natural professional English, 150-250 words, a discussion
-question, and 3-5 relevant hashtags.
+PERSONAL PERSPECTIVE: Show a clear BA point of view through judgement and
+practical questions: what to ask during discovery, which process gap to map,
+which requirement or acceptance criterion to clarify, or what evidence to
+inspect. Focus on one meaningful insight. Do not invent personal anecdotes,
+client work, credentials, tool use, incidents or achievements. If no verified
+personal detail is available, use an honest practitioner observation or a
+clearly hypothetical example instead.
+
+RESEARCH: Use Google Search to research a current business or technology issue.
+Rotate themes such as AI governance, cybersecurity, data quality, workflow
+automation, digital identity, fintech, cloud resilience, accessibility, product
+discovery, change adoption and operational risk. Explain the practical problem,
+who feels its impact, and one specific BA intervention. Name a metric to
+investigate where useful, but never claim improvement without evidence. Never
+invent statistics, results, sources, clients or personal experience.
+
+FORMAT: Aim for 150-250 words with readable short paragraphs. Use a list only
+when it genuinely helps. End with one specific, open question for peers and add
+3-5 relevant hashtags. Before returning, silently revise to remove robotic
+phrases, replace abstractions with concrete language, and check every claim.
 
 Return valid JSON only with:
 {"topic":"...","text":"..."}
