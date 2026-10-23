@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    const quotaLimited = /\\b429\\b|RESOURCE_EXHAUSTED|quota/i.test(message);
+    const quotaLimited = /429|RESOURCE_EXHAUSTED|quota/i.test(message);
 
     try {
       if (quotaLimited) {
@@ -134,7 +134,7 @@ export async function GET(request: NextRequest) {
     try {
       await alertFailure(
         quotaLimited ? 'Scheduled draft generation paused: Gemini quota' : 'Scheduled draft generation failed',
-        `Lagos day: ${day}\\n${message}`,
+        `Lagos day: ${day}\n${message}`,
       );
     } catch {
       // Alerting must not mask the original failure.
