@@ -29,7 +29,7 @@ type SavedDraft = Omit<DraftData, 'mode' | 'published'> & {
   updated_at: string;
 };
 
-const SAVE_ENABLED = false;
+const SAVE_ENABLED = true;
 
 export default function DraftPreview() {
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -134,7 +134,7 @@ export default function DraftPreview() {
       setPassword('');
       setAuthenticated(true);
       await refreshSavedDrafts();
-      setNotice('Signed in. Saving is still disabled pending approval.');
+      setNotice('Signed in. Draft generation and Redis draft storage are available. Publishing remains disconnected.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Sign-in failed.');
     } finally {
@@ -163,6 +163,42 @@ export default function DraftPreview() {
       setReviewStatus('Not reviewed');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Sign-out failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generateLiveDraft() {
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch('/api/drafts/generate', {
+        method: 'POST',
+        cache: 'no-store',
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        published?: boolean;
+        draft?: SavedDraft;
+      };
+
+      if (!response.ok || !data.ok || !data.draft || data.published !== false) {
+        throw new Error(data.error || 'Draft generation failed.');
+      }
+
+      const saved = data.draft;
+      setDraft({ ...saved, mode: 'saved', published: false });
+      setTopic(saved.topic);
+      setText(saved.text);
+      setReviewStatus('Not reviewed');
+      setSelectedId(saved.id);
+      await refreshSavedDrafts();
+      setNotice('Gemini generated a draft and saved it to Redis. It has not been approved or published.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Draft generation failed.');
     } finally {
       setBusy(false);
     }
@@ -347,8 +383,8 @@ export default function DraftPreview() {
       ) : (
         <>
           <div className="draft-preview-safety">
-            <strong>Protected draft workspace</strong>
-            <span>Login protects draft access. No LinkedIn publishing or Gemini generation is connected to this editor. Save and update are deliberately disabled until the first Redis write is approved.</span>
+            <strong>Protected, draft-only workspace</strong>
+            <span>Generate uses Gemini and saves the result to Redis for review. It never publishes to LinkedIn. Every generated draft starts as Not reviewed; local approval is not permission to publish.</span>
           </div>
 
           <div className="draft-preview-actions">
@@ -362,6 +398,14 @@ export default function DraftPreview() {
             </button>
             <button
               className="preview-button"
+              type="button"
+              onClick={generateLiveDraft}
+              disabled={busy}
+            >
+              {busy ? 'Working…' : 'Generate draft with Gemini'}
+            </button>
+            <button
+              className="preview-secondary-button"
               type="button"
               onClick={loadPreview}
               disabled={busy}
@@ -512,8 +556,8 @@ export default function DraftPreview() {
                 </button>
                 <p className="preview-meta">
                   {SAVE_ENABLED
-                    ? 'Saving writes draft content and review status to Redis.'
-                    : 'Saving is currently locked. No Redis write can be triggered from this editor.'}
+                    ? 'Saving writes draft content and review status to Redis. It does not publish.'
+                    : 'Saving is currently locked.'}
                 </p>
               </div>
 
