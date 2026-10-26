@@ -11,7 +11,7 @@ export type Draft = {
 
 export async function generateDraft(): Promise<Draft> {
   const ai = new GoogleGenAI({ apiKey: env('GEMINI_API_KEY') });
-  const model = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+  const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
 
   const prompt = `
 Create one original, practical LinkedIn post for a Nigeria-based Business
@@ -57,6 +57,9 @@ Do not wrap the JSON in Markdown fences or add commentary outside the JSON.
   const response = await ai.models.generateContent({
     model,
     contents: prompt,
+    config: {
+      tools: [{ googleSearch: {} }],
+    },
   });
 
   const raw = response.text?.trim() ?? '';
@@ -77,7 +80,25 @@ Do not wrap the JSON in Markdown fences or add commentary outside the JSON.
 
   const text = String(parsed.text ?? '').trim();
   const topic = String(parsed.topic ?? '').trim();
+
+  const groundingChunks =
+    response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+
   const sources: { title: string; url: string }[] = [];
+  for (const chunk of groundingChunks) {
+    const web = chunk.web;
+    const url = web?.uri?.trim() ?? '';
+    const title = web?.title?.trim() || url;
+
+    if (
+      /^https:\/\//i.test(url) &&
+      title &&
+      !sources.some((source) => source.url === url)
+    ) {
+      sources.push({ title, url });
+    }
+  }
+
   const checks = validateDraft(topic, text, sources);
 
   return { topic, text, sources, checks };
