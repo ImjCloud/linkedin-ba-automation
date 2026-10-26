@@ -10,6 +10,12 @@ type ReviewStatus =
 
 type DraftSource = { title: string; url: string };
 
+type PublishStatus =
+  | 'not_published'
+  | 'publishing'
+  | 'published'
+  | 'manual_review_required';
+
 type DraftData = {
   id?: string;
   mode: 'mock' | 'saved';
@@ -21,6 +27,12 @@ type DraftData = {
   reviewStatus: ReviewStatus;
   created_at?: string;
   updated_at?: string;
+  publishStatus?: PublishStatus;
+  linkedinPostUrn?: string;
+  published_at?: string;
+  publishError?: string;
+  publishAttemptedAt?: string;
+  publishFinishedAt?: string;
 };
 
 type SavedDraft = Omit<DraftData, 'mode' | 'published'> & {
@@ -52,7 +64,7 @@ export default function DraftPreview() {
     [topic, text, draft?.sources],
   );
 
-  async function refreshSavedDrafts() {
+  async function refreshSavedDrafts(): Promise<SavedDraft[]> {
     const response = await fetch('/api/drafts', { cache: 'no-store' });
     const data = await response.json() as {
       ok?: boolean;
@@ -65,6 +77,7 @@ export default function DraftPreview() {
     }
 
     setDrafts(data.drafts);
+    return data.drafts;
   }
 
   useEffect(() => {
@@ -134,7 +147,7 @@ export default function DraftPreview() {
       setPassword('');
       setAuthenticated(true);
       await refreshSavedDrafts();
-      setNotice('Signed in. Manual draft saving is enabled. Publishing remains disabled.');
+      setNotice('Signed in. Gemini generation saves unpublished drafts. LinkedIn publishing remains disabled.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Sign-in failed.');
     } finally {
@@ -217,6 +230,32 @@ export default function DraftPreview() {
     }
   }
 
+  async function generateWithGemini() {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch('/api/drafts/generate', { method: 'POST', cache: 'no-store' });
+      const data = await response.json() as {
+        ok?: boolean; error?: string; mode?: string; published?: boolean; draft?: SavedDraft;
+      };
+      if (!response.ok || !data.ok || data.mode !== 'gemini' || !data.draft || data.published !== false) {
+        throw new Error(data.error || 'Gemini draft generation failed.');
+      }
+      const saved = data.draft;
+      setDraft({ ...saved, mode: 'saved', published: false });
+      setSelectedId(saved.id);
+      setTopic(saved.topic);
+      setText(saved.text);
+      setReviewStatus('Not reviewed');
+      await refreshSavedDrafts();
+      setNotice('Gemini draft generated and saved to Redis. It has not been published.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Gemini draft generation failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
   function openSavedDraft(id: string) {
     setSelectedId(id);
     setError('');
@@ -246,6 +285,19 @@ export default function DraftPreview() {
     setReviewStatus('Not reviewed');
   }
 
+  function updateSources(nextSources: DraftSource[]) {
+    setDraft((current) => {
+      if (!current) return current;
+      return { ...current, sources: nextSources };
+    });
+    setReviewStatus('Not reviewed');
+    setNotice('');
+  }
+
+  function addSource() {
+    if (!draft || draft.sources.length >= 10) return;
+    updateSources([...draft.sources, { title: '', url: '' }]);
+  }
   async function saveDraft() {
     if (!SAVE_ENABLED || !draft) return;
 
@@ -287,6 +339,79 @@ export default function DraftPreview() {
       setNotice('Draft saved.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save the draft.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publishDraft() {
+    if (
+      !draft?.id ||
+      draft.mode !== 'saved' ||
+      reviewStatus !== 'Approved locally' ||
+      draft.reviewStatus !== 'Approved locally' ||
+      !checks.passed ||
+      busy ||
+      ['publishing', 'published', 'manual_review_required'].includes(
+        draft.publishStatus ?? 'not_published',
+      )
+    ) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'This sends the approved draft to LinkedIn publicly. Continue?'
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch(`/api/drafts/${draft.id}/publish`, {
+        method: 'POST',
+        cache: 'no-store',
+      });
+
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+      };
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'The publish request was not completed.');
+      }
+
+      const refreshed = await refreshSavedDrafts();
+      const saved = refreshed.find((item) => item.id === draft.id);
+
+      if (saved) {
+        setDraft({ ...saved, mode: 'saved', published: false });
+        setReviewStatus(saved.reviewStatus);
+      }
+
+      setNotice(data.message || 'LinkedIn reported successful publication.');
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'Publishing could not be confirmed. Refresh the saved draft before taking further action.'
+      );
+
+      // Refresh status after errors too: an uncertain outcome must not
+      // leave the editor showing an apparently safe-to-retry draft.
+      try {
+        const refreshed = await refreshSavedDrafts();
+        const saved = refreshed.find((item) => item.id === draft.id);
+        if (saved) {
+          setDraft({ ...saved, mode: 'saved', published: false });
+          setReviewStatus(saved.reviewStatus);
+        }
+      } catch {
+        // Keep the error visible; do not automatically retry publication.
+      }
     } finally {
       setBusy(false);
     }
@@ -348,7 +473,7 @@ export default function DraftPreview() {
         <>
           <div className="draft-preview-safety">
             <strong>Protected draft workspace</strong>
-            <span>Login protects draft access. No LinkedIn publishing or Gemini generation is connected to this editor. Manual saving writes drafts to Redis only. LinkedIn publishing and Gemini generation are not available from this editor.</span>
+            <span>Draft generation and saving do not publish to LinkedIn. Manual publishing is protected by a server-side feature flag and requires a saved, validated, locally approved draft. An uncertain publishing result must be checked before any retry.</span>
           </div>
 
           <div className="draft-preview-actions">
@@ -362,6 +487,14 @@ export default function DraftPreview() {
             </button>
             <button
               className="preview-button"
+              type="button"
+              onClick={generateWithGemini}
+              disabled={busy}
+            >
+              {busy ? 'Working…' : 'Generate with Gemini'}
+            </button>
+            <button
+              className="preview-secondary-button"
               type="button"
               onClick={loadPreview}
               disabled={busy}
@@ -461,17 +594,98 @@ export default function DraftPreview() {
               )}
 
               <div className="preview-sources">
-                <h3>Reference sources</h3>
-                <ul className="source-list">
-                  {draft.sources.map((source) => (
-                    <li key={source.url}>
-                      <a href={source.url} target="_blank" rel="noopener noreferrer">
-                        {source.title}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+  <h3>Reference sources</h3>
+  <p className="preview-meta">
+    References are optional. Add up to 10 relevant HTTPS sources when useful. Open and review each source yourself; a valid URL alone does not establish that a source is accurate or relevant.
+  </p>
+
+  {draft.sources.length === 0 && (
+            <p className="preview-meta">
+              No references added. That is fine for posts that do not need citations.
+            </p>
+          )}
+
+  <div className="source-editor-list">
+    {draft.sources.map((source, index) => (
+      <div className="draft-editor-fields" key={`source-${index}`}>
+        <label className="draft-field">
+          <span className="field-label">Source {index + 1} title</span>
+          <input
+            value={source.title}
+            maxLength={200}
+            aria-label={`Source ${index + 1} title`}
+            placeholder="Page or report title"
+            onChange={(event) => {
+              const next = [...draft.sources];
+              next[index] = { ...source, title: event.target.value };
+              updateSources(next);
+            }}
+          />
+        </label>
+
+        <label className="draft-field">
+          <span className="field-label">HTTPS URL</span>
+          <input
+            type="url"
+            value={source.url}
+            maxLength={2048}
+            aria-label={`Source ${index + 1} URL`}
+            placeholder="https://example.com/reference"
+            onChange={(event) => {
+              const next = [...draft.sources];
+              next[index] = { ...source, url: event.target.value };
+              updateSources(next);
+            }}
+          />
+        </label>
+
+        {source.url.trim().startsWith('https://') && (
+          <p className="preview-meta">
+            Link added — not independently verified. Review it before approval.
+          </p>
+        )}
+
+        <button
+          className="preview-secondary-button"
+          type="button"
+          onClick={() => {
+            updateSources(draft.sources.filter((_, i) => i !== index));
+          }}
+        >
+          Remove source
+        </button>
+      </div>
+    ))}
+  </div>
+
+  <button
+    className="preview-secondary-button"
+    type="button"
+    disabled={draft.sources.length >= 10}
+    onClick={addSource}
+  >
+    Add reference source ({draft.sources.length}/10)
+  </button>
+
+  <ul className="source-list">
+    {draft.sources
+      .filter((source) => {
+        try {
+          return new URL(source.url).protocol === 'https:';
+        } catch {
+          return false;
+        }
+      })
+      .map((source, index) => (
+        <li key={`${source.url}-${index}`}>
+          <a href={source.url} target="_blank" rel="noopener noreferrer">
+            {source.title.trim() || source.url}
+          </a>
+        </li>
+      ))}
+  </ul>
+</div>
+
 
               <div className="draft-review-panel">
                 <div>
@@ -515,6 +729,47 @@ export default function DraftPreview() {
                     ? 'Saving writes draft content and review status to Redis.'
                     : 'Saving writes draft content and review status to Redis only. Nothing is published.'}
                 </p>
+              </div>
+
+              <div className="draft-save-panel">
+                <button
+                  className="preview-button"
+                  type="button"
+                  onClick={publishDraft}
+                  disabled={
+                    busy ||
+                    !draft.id ||
+                    draft.mode !== 'saved' ||
+                    !checks.passed ||
+                    reviewStatus !== 'Approved locally' ||
+                    draft.reviewStatus !== 'Approved locally' ||
+                    ['publishing', 'published', 'manual_review_required'].includes(
+                      draft.publishStatus ?? 'not_published',
+                    )
+                  }
+                  title="Publishes this saved, approved draft only if the server-side publishing flag is enabled."
+                >
+                  {busy ? 'Working…' : 'Publish to LinkedIn'}
+                </button>
+                <p className="preview-meta">
+                  {draft.publishStatus === 'published'
+                    ? 'Published. This draft cannot be published again.'
+                    : draft.publishStatus === 'manual_review_required'
+                      ? 'Publishing outcome needs manual verification. Do not retry until LinkedIn has been checked.'
+                      : draft.publishStatus === 'publishing'
+                        ? 'A publishing attempt is in progress. Do not retry.'
+                        : 'Requires a saved approval, a valid draft, explicit confirmation, and server-side publishing enablement.'}
+                </p>
+                {draft.linkedinPostUrn && (
+                  <p className="preview-meta">
+                    LinkedIn post reference: {draft.linkedinPostUrn}
+                  </p>
+                )}
+                {draft.published_at && (
+                  <p className="preview-meta">
+                    Published at: {new Date(draft.published_at).toLocaleString()}
+                  </p>
+                )}
               </div>
 
               <p className="preview-disclaimer">

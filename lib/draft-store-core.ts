@@ -60,6 +60,10 @@ if not current then
   return nil
 end
 local record = cjson.decode(current)
+local status = record.publishStatus or 'not_published'
+if status == 'publishing' or status == 'published' or status == 'manual_review_required' then
+  return '__draft_protected__'
+end
 local updates = cjson.decode(ARGV[1])
 for key, value in pairs(updates) do
   record[key] = value
@@ -75,6 +79,11 @@ const DELETE_DRAFT_SCRIPT = `
 local current = redis.call('GET', KEYS[1])
 if not current then
   return 0
+end
+local record = cjson.decode(current)
+local status = record.publishStatus or 'not_published'
+if status == 'publishing' or status == 'published' or status == 'manual_review_required' then
+  return -1
 end
 redis.call('DEL', KEYS[1])
 redis.call('LREM', KEYS[2], 0, ARGV[1])
@@ -144,6 +153,9 @@ export function createDraftStore(getRedis: () => DraftRedis) {
       [JSON.stringify(updates), new Date().toISOString()],
     );
 
+    if (result === '__draft_protected__') {
+      throw new Error('DRAFT_PROTECTED');
+    }
     return decodeRecord(result);
   }
 
@@ -153,6 +165,9 @@ export function createDraftStore(getRedis: () => DraftRedis) {
       [draftKey(id), DRAFT_INDEX],
       [id],
     );
+    if (Number(result) === -1) {
+      throw new Error('DRAFT_PROTECTED');
+    }
     return Number(result) === 1;
   }
 

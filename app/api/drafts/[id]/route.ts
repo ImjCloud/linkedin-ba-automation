@@ -66,13 +66,27 @@ function parseDraft(body: unknown): {
   for (const source of data.sources) {
     if (typeof source !== 'object' || source === null) return null;
     const item = source as Record<string, unknown>;
+
     if (
       typeof item.title !== 'string' ||
+      !item.title.trim() ||
       item.title.length > 200 ||
       typeof item.url !== 'string' ||
-      item.url.length > 2048 ||
-      !/^https:\/\//i.test(item.url)
+      item.url.length > 2048
     ) return null;
+
+    try {
+      const sourceUrl = new URL(item.url);
+      if (
+        sourceUrl.protocol !== 'https:' ||
+        !sourceUrl.hostname ||
+        sourceUrl.username ||
+        sourceUrl.password
+      ) return null;
+    } catch {
+      return null;
+    }
+
     sources.push({ title: item.title.trim(), url: item.url });
   }
 
@@ -151,6 +165,24 @@ export async function PATCH(
       );
     }
 
+    const publishStatus = (
+      current as typeof current & { publishStatus?: string }
+    ).publishStatus;
+
+    if (
+      publishStatus === 'publishing' ||
+      publishStatus === 'published' ||
+      publishStatus === 'manual_review_required'
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'This draft cannot be edited while publishing, after publication, or while its outcome requires manual verification.',
+        },
+        { status: 409 },
+      );
+    }
+
     const draft = await updateSavedDraft(id, { ...parsed, checks });
     if (!draft) {
       return NextResponse.json(
@@ -163,7 +195,13 @@ export async function PATCH(
       { ok: true, draft },
       { headers: { 'Cache-Control': 'no-store' } },
     );
-  } catch {
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === 'DRAFT_PROTECTED') {
+      return NextResponse.json(
+        { ok: false, error: 'This draft cannot be edited while publishing, after publication, or while its outcome requires manual verification.' },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { ok: false, error: 'The draft could not be updated.' },
       { status: 503 },
@@ -198,6 +236,32 @@ export async function DELETE(
   }
 
   try {
+    const current = await getSavedDraft(id);
+    if (!current) {
+      return NextResponse.json(
+        { ok: false, error: 'Draft not found.' },
+        { status: 404 },
+      );
+    }
+
+    const publishStatus = (
+      current as typeof current & { publishStatus?: string }
+    ).publishStatus;
+
+    if (
+      publishStatus === 'publishing' ||
+      publishStatus === 'published' ||
+      publishStatus === 'manual_review_required'
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'This draft cannot be deleted while publishing, after publication, or while its outcome requires manual verification.',
+        },
+        { status: 409 },
+      );
+    }
+
     const deleted = await deleteSavedDraft(id);
     if (!deleted) {
       return NextResponse.json(
@@ -210,7 +274,13 @@ export async function DELETE(
       { ok: true, deleted: true },
       { headers: { 'Cache-Control': 'no-store' } },
     );
-  } catch {
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === 'DRAFT_PROTECTED') {
+      return NextResponse.json(
+        { ok: false, error: 'This draft cannot be deleted while publishing, after publication, or while its outcome requires manual verification.' },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { ok: false, error: 'The draft could not be deleted.' },
       { status: 503 },

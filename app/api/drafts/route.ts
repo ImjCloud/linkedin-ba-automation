@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   DRAFT_SESSION_COOKIE,
   getDraftAccessSecret,
@@ -67,11 +67,24 @@ function parseDraft(body: unknown): {
     const item = source as Record<string, unknown>;
     if (
       typeof item.title !== 'string' ||
+      !item.title.trim() ||
       item.title.length > 200 ||
       typeof item.url !== 'string' ||
-      item.url.length > 2048 ||
-      !/^https:\/\//i.test(item.url)
+      item.url.length > 2048
     ) return null;
+
+    try {
+      const sourceUrl = new URL(item.url);
+      if (
+        sourceUrl.protocol !== 'https:' ||
+        !sourceUrl.hostname ||
+        sourceUrl.username ||
+        sourceUrl.password
+      ) return null;
+    } catch {
+      return null;
+    }
+
     sources.push({ title: item.title.trim(), url: item.url });
   }
 

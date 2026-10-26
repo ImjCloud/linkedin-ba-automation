@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDraftStore } from '../lib/draft-store-core.ts';
 
@@ -44,6 +44,10 @@ function createMockRedis() {
         if (currentJson === undefined) return null;
 
         const record = JSON.parse(currentJson);
+        const status = record.publishStatus ?? 'not_published';
+        if (['publishing', 'published', 'manual_review_required'].includes(status)) {
+          return '__draft_protected__';
+        }
         const updates = JSON.parse(updatesJson);
         Object.assign(record, updates);
         record.updated_at = updatedAt;
@@ -58,6 +62,12 @@ function createMockRedis() {
         const [id] = args;
 
         if (!values.has(recordKey)) return 0;
+
+        const record = JSON.parse(values.get(recordKey));
+        const status = record.publishStatus ?? 'not_published';
+        if (['publishing', 'published', 'manual_review_required'].includes(status)) {
+          return -1;
+        }
 
         values.delete(recordKey);
         const index = lists.get(indexKey) ?? [];
@@ -189,6 +199,47 @@ test('uses atomic Redis scripts for creation, updates and deletion', async () =>
   assert.match(scripts[2], /redis\.call\('LREM'/);
 });
 
+
+test('atomically blocks updates for publishing, published, and uncertain drafts', async () => {
+  for (const status of ['publishing', 'published', 'manual_review_required']) {
+    const redis = createMockRedis();
+    const store = createDraftStore(() => redis);
+    const draft = await store.createSavedDraft(sampleInput());
+    const key = `linkedin:drafts:${draft.id}`;
+    const record = JSON.parse(redis.values.get(key));
+    record.publishStatus = status;
+    redis.values.set(key, JSON.stringify(record));
+
+    await assert.rejects(
+      store.updateSavedDraft(draft.id, {
+        ...sampleInput('Changed topic'),
+        reviewStatus: 'Approved locally',
+      }),
+      /DRAFT_PROTECTED/,
+    );
+
+    assert.equal((await store.getSavedDraft(draft.id)).topic, draft.topic);
+  }
+});
+
+test('atomically blocks deletion for publishing, published, and uncertain drafts', async () => {
+  for (const status of ['publishing', 'published', 'manual_review_required']) {
+    const redis = createMockRedis();
+    const store = createDraftStore(() => redis);
+    const draft = await store.createSavedDraft(sampleInput());
+    const key = `linkedin:drafts:${draft.id}`;
+    const record = JSON.parse(redis.values.get(key));
+    record.publishStatus = status;
+    redis.values.set(key, JSON.stringify(record));
+
+    await assert.rejects(
+      store.deleteSavedDraft(draft.id),
+      /DRAFT_PROTECTED/,
+    );
+
+    assert.ok(await store.getSavedDraft(draft.id));
+  }
+});
 
 // EDGE_CASE_TESTS_20261022
 

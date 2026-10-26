@@ -17,3 +17,5 @@ tsconfig.tsbuildinfo
 
 # Local migration backup files
 *.backup-*
+.vercel
+.env*

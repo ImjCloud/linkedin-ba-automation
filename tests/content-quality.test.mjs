@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDraft } from '../lib/content-quality.ts';
 
@@ -21,12 +21,15 @@ test('accepts a valid mock draft', () => {
   assert.equal(result.passed, true, result.reasons.join('; '));
 });
 
-test('rejects a draft with too few HTTPS sources', () => {
-  const result = validateDraft('Workflow automation', text, sources.slice(0, 1));
-  assert.equal(result.passed, false);
-  assert.ok(result.reasons.some((reason) => reason.includes('Fewer than two valid HTTPS sources')));
+test('accepts a valid draft without reference sources', () => {
+  const result = validateDraft('Workflow automation', text, []);
+  assert.equal(result.passed, true, result.reasons.join('; '));
 });
 
+test('accepts a valid draft with one reference source', () => {
+  const result = validateDraft('Workflow automation', text, sources.slice(0, 1));
+  assert.equal(result.passed, true, result.reasons.join('; '));
+});
 test('rejects a vague topic', () => {
   assert.equal(validateDraft('AI', text, sources).passed, false);
 });
